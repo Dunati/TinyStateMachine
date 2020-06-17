@@ -78,7 +78,10 @@ namespace M16h {
         public class Machine<TMemory> where TMemory : IStorage {
             #region Nested types
 
-            private abstract class TransitionBase {
+            /// <summary>
+            /// Base class for transitions, should not be instantiated
+            /// </summary>
+            internal abstract class TransitionBase {
                 public Func<TState, TTrigger, TState, bool> Guard { get; set; }
                 public TState Next { get; }
 
@@ -92,16 +95,365 @@ namespace M16h {
                 }
 
             }
-            private class Transition : TransitionBase {
+            internal class Transition : TransitionBase {
                 public Action<TState, TTrigger, TState, TMemory> Action { get; set; }
 
                 public Transition(TState next) : base(next) { }
             }
 
-            private class Transition<TArg> : TransitionBase {
+            internal class Transition<TArg> : TransitionBase {
                 public Action<TState, TTrigger, TState, TMemory, TArg> Action { get; set; }
 
                 public Transition(TState next) : base(next) { }
+            }
+
+
+            /// <summary>
+            /// The compiler is used to generate the transitions for the state machine.
+            /// </summary>
+            public class Compiler {
+                private readonly TState startingState;
+                Action<TState, TTrigger, TState, TMemory> onAnyTransitionAction;
+
+                private Dictionary<TState, Dictionary<TTrigger, TransitionBase>> transitions;
+
+                private TState lastConfiguredState;
+                private TTrigger lastConfiguredTrigger;
+
+                /// <summary>
+                /// Initializes a new Compiler
+                /// </summary>
+                /// <param name="startingState">The initial state for new <see cref="Storage"/> objects.</param>
+                public Compiler(TState startingState) {
+                    this.startingState = startingState;
+                }
+
+                /// <summary>
+                /// Creates a new Machine.
+                /// </summary>
+                /// <returns>A new Machine with the configured transitions.</returns>
+                /// <remarks>All transitions are owned by the result Machine and the state to the compiler is reset to that of a newly construted Compiler.</remarks>
+                public Machine<TMemory> Compile() {
+
+                    var machine = new Machine<TMemory>(startingState, transitions, onAnyTransitionAction);
+
+                    transitions = null;
+                    lastConfiguredState = default(TState);
+                    lastConfiguredTrigger = default(TTrigger);
+                    onAnyTransitionAction = null;
+                    return machine;
+                }
+
+
+                /// <summary>
+                /// See <see cref="Guard(Func&lt;TState,TTrigger,TState,bool&gt;)"/>.
+                /// </summary>
+                /// <param name="guard">A delegate to the method that will be called
+                /// before attempting the transition.</param>
+                /// <returns><c>this</c></returns>
+                public Compiler Guard(Func<bool> guard) {
+                    return Guard((f, tr, t) => guard());
+                }
+
+                /// <summary>
+                /// Sets the method that will be called <em>before</em> attempting to make the
+                /// transition described by the last call to 
+                /// <see cref="Tr(TState, TTrigger, TState)">Tr</see>. The transitions
+                /// will be silently aborted without throwing any errors if
+                /// <paramref name="guard"/> method returns <c>false</c>, and will
+                /// continue normally if the method returns <c>true</c>
+                /// </summary>
+                /// <param name="guard">A delegate to the method that will be called
+                /// before attempting the transition.</param>
+                /// <returns><c>this</c></returns>
+                /// <exception cref="System.InvalidOperationException">No transition
+                /// was configured before calling this method or a guard was already
+                /// set for the last transition.
+                /// </exception>
+                /// <exception cref="System.ArgumentNullException">
+                /// <paramref name="guard"/> is null.
+                /// </exception>
+                public Compiler Guard(
+                    Func<TState, TTrigger, TState, bool> guard
+                    ) {
+                    if (guard == null) {
+                        throw new ArgumentNullException("guard");
+                    }
+
+                    if (transitions.Count == 0) {
+                        throw new InvalidOperationException(
+                            "\"Guard\" cannot be called before configuring a" +
+                            " transition."
+                            );
+                    }
+
+                    var tr = transitions[lastConfiguredState][lastConfiguredTrigger];
+
+                    if (tr.Guard != null) {
+                        var errorMessage = string.Format(
+                            "A guard has already been configured for state {0}" +
+                            " and trigger {1}.",
+                            lastConfiguredState,
+                            lastConfiguredTrigger
+                            );
+                        throw new InvalidOperationException(errorMessage);
+                    }
+
+                    tr.Guard = guard;
+
+                    return this;
+                }
+
+
+                /// <summary>
+                /// See
+                /// <see cref="On(Action{TState,TTrigger,TState,TMemory})"/>.
+                /// </summary>
+                /// <param name="action">A delegate to a method that will be called 
+                /// on state change.</param>
+                /// <returns><c>this</c></returns>
+                public Compiler On<TArg>(Action<TMemory, TArg> action) {
+                    return On<TArg>((f, tr, t, st, arg) => action(st, arg));
+                }
+                /// <summary>
+                /// Sets the action that will be called <em>after</em> the transition
+                /// described by the last call to 
+                /// <see cref="Tr(TState, TTrigger, TState)">Tr</see> takes place.
+                /// </summary>
+                /// <param name="action">A delegate to a method that will be called 
+                /// on state change.</param>
+                /// <returns><c>this</c></returns>
+                /// <exception cref="System.InvalidOperationException">No transition
+                /// was configured before calling this method, an action was already
+                /// set for the last transition, or the method was called after the 
+                /// the configuration phase was done (i.e. after 
+                /// <see cref="Fire(TTrigger, TMemory)">Fire</see>, <see cref="IStorage"/>, or
+                /// <see cref="Storage.IsInState(TState)">IsInState</see>) were called).
+                /// </exception>
+                /// <exception cref="System.ArgumentNullException">
+                /// <paramref name="action"/> is null.
+                /// </exception>
+                public Compiler On<TArg>(
+                    Action<TState, TTrigger, TState, TMemory, TArg> action
+                    ) {
+                    if (action == null) {
+                        throw new ArgumentNullException("action");
+                    }
+
+                    if (transitions.Count == 0) {
+                        throw new InvalidOperationException(
+                            "\"On\" method cannot be called before configuring a" +
+                            " transition."
+                            );
+                    }
+
+                    var tr = transitions[lastConfiguredState][lastConfiguredTrigger] as Transition<TArg>;
+
+                    if (tr == null) {
+                        throw new InvalidOperationException($"{transitions[lastConfiguredState][lastConfiguredTrigger].GetType().Name} doesn't match expected type {typeof(Transition<TArg>).Name}");
+                    }
+                    if (tr.Action != null) {
+                        var errorMessage = string.Format(
+                            "An action has already been configured for state {0} and" +
+                            " trigger {1}.",
+                            lastConfiguredState,
+                            lastConfiguredTrigger
+                            );
+                        throw new InvalidOperationException(errorMessage);
+                    }
+
+                    tr.Action = action;
+
+                    return this;
+                }
+
+
+
+                /// <summary>
+                /// See
+                /// <see cref="On(Action{TState,TTrigger,TState,TMemory})"/>.
+                /// </summary>
+                /// <param name="action">A delegate to a method that will be called 
+                /// on state change.</param>
+                /// <returns><c>this</c></returns>
+                public Compiler On(Action<TMemory> action) {
+                    return On((f, tr, t, st) => action(st));
+                }
+                /// <summary>
+                /// Sets the action that will be called <em>after</em> the transition
+                /// described by the last call to 
+                /// <see cref="Tr(TState, TTrigger, TState)">Tr</see> takes place.
+                /// </summary>
+                /// <param name="action">A delegate to a method that will be called 
+                /// on state change.</param>
+                /// <returns><c>this</c></returns>
+                /// <exception cref="System.InvalidOperationException">No transition
+                /// was configured before calling this method, an action was already
+                /// set for the last transition, or the method was called after the 
+                /// the configuration phase was done (i.e. after 
+                /// <see cref="Fire(TTrigger, TMemory)">Fire</see>, <see cref="IStorage"/>, or
+                /// <see cref="Storage.IsInState(TState)">IsInState</see>) were called).
+                /// </exception>
+                /// <exception cref="System.ArgumentNullException">
+                /// <paramref name="action"/> is null.
+                /// </exception>
+                public Compiler On(
+                    Action<TState, TTrigger, TState, TMemory> action
+                    ) {
+                    if (action == null) {
+                        throw new ArgumentNullException("action");
+                    }
+
+                    if (transitions.Count == 0) {
+                        throw new InvalidOperationException(
+                            "\"On\" method cannot be called before configuring a" +
+                            " transition."
+                            );
+                    }
+
+                    var tr = transitions[lastConfiguredState][lastConfiguredTrigger] as Transition;
+
+                    if (tr == null) {
+                        throw new InvalidOperationException($"{transitions[lastConfiguredState][lastConfiguredTrigger].GetType().Name} doesn't match expected type {typeof(Transition).Name}");
+                    }
+                    if (tr.Action != null) {
+                        var errorMessage = string.Format(
+                            "An action has already been configured for state {0} and" +
+                            " trigger {1}.",
+                            lastConfiguredState,
+                            lastConfiguredTrigger
+                            );
+                        throw new InvalidOperationException(errorMessage);
+                    }
+
+                    tr.Action = action;
+
+                    return this;
+                }
+
+                /// <summary>
+                /// See <see cref="OnAny(Action{TState,TTrigger,TState,TMemory})"/>.
+                /// </summary>
+                /// <param name="action">A delegate to a method that will be called 
+                /// on state change.</param>
+                /// <returns><c>this</c></returns>
+                public Compiler OnAny(Action<TMemory> action) {
+                    return OnAny((f, tr, t, st) => action(st));
+                }
+
+                /// <summary>
+                /// Sets the action that will be called after <em>any</em> finite state
+                /// machine transition is triggered.
+                /// </summary>
+                /// <param name="action">A delegate to a method that will be called 
+                /// on state change.</param>
+                /// <returns><c>this</c></returns>
+                /// <exception cref="System.InvalidOperationException">The method was
+                /// called after the configuration phase was done (i.e. after 
+                /// <see cref="Fire(TTrigger, TMemory)">Fire</see>, <see cref="IStorage"/>, or
+                /// <see cref="Storage.IsInState(TState)">IsInState</see>) were called).
+                /// </exception>
+                /// <exception cref="System.ArgumentNullException">
+                /// <paramref name="action"/> is null.
+                /// </exception>
+                public Compiler OnAny(
+                    Action<TState, TTrigger, TState, TMemory> action
+                    ) {
+                    if (action == null) {
+                        throw new ArgumentNullException("action");
+                    }
+
+                    onAnyTransitionAction = action;
+                    return this;
+                }
+
+
+                private void validateTrArgs(TState from, TTrigger trigger, TState to) {
+                    if (from == null) {
+                        throw new ArgumentNullException("from");
+                    }
+
+                    if (trigger == null) {
+                        throw new ArgumentNullException("trigger");
+                    }
+
+                    if (to == null) {
+                        throw new ArgumentNullException("to");
+                    }
+
+                    if(transitions == null) {
+                        transitions = new Dictionary<TState, Dictionary<TTrigger, TransitionBase>>();
+                    }
+
+                    if (!transitions.ContainsKey(from)) {
+                        transitions.Add(from, new Dictionary<TTrigger, TransitionBase>());
+                    }
+                    else if (transitions[from].ContainsKey(trigger)) {
+                        string errorMessage = string.Format(
+                            "A transition is already defined for state {0} and" +
+                            " trigger {1}",
+                            from,
+                            trigger
+                            );
+                        throw new InvalidOperationException(errorMessage);
+                    }
+                }
+
+                /// <summary>
+                /// Short for "Transition." Adds a new entry to the state transition table.
+                /// </summary>
+                /// <param name="from">Current state</param>
+                /// <param name="trigger">Trigger</param>
+                /// <param name="to">The state the FSM will transition to.</param>
+                /// <returns><c>this</c></returns>
+                /// <exception cref="System.ArgumentNullException">Any of the
+                /// arguments <paramref name="from"/>, <paramref name="trigger"/>, or 
+                /// <paramref name="to"/> is null.
+                /// </exception>
+                public Compiler Tr<TArg>(
+                    TState from,
+                    TTrigger trigger,
+                    TState to
+                    ) {
+                    validateTrArgs(from, trigger, to);
+
+
+                    var transtition = new Transition<TArg>(to);
+                    transitions[from].Add(trigger, transtition);
+
+                    lastConfiguredState = from;
+                    lastConfiguredTrigger = trigger;
+
+                    return this;
+                }
+
+
+                /// <summary>
+                /// Short for "Transition." Adds a new entry to the state transition table.
+                /// </summary>
+                /// <param name="from">Current state</param>
+                /// <param name="trigger">Trigger</param>
+                /// <param name="to">The state the FSM will transition to.</param>
+                /// <returns><c>this</c></returns>
+                /// <exception cref="System.ArgumentNullException">Any of the
+                /// arguments <paramref name="from"/>, <paramref name="trigger"/>, or 
+                /// <paramref name="to"/> is null.
+                /// </exception>
+                public Compiler Tr(
+                    TState from,
+                    TTrigger trigger,
+                    TState to
+                    ) {
+                    validateTrArgs(from, trigger, to);
+
+                    var transtition = new Transition(to);
+                    transitions[from].Add(trigger, transtition);
+
+                    lastConfiguredState = from;
+                    lastConfiguredTrigger = trigger;
+
+                    return this;
+                }
             }
 
 
@@ -112,49 +464,30 @@ namespace M16h {
             /// </summary>
             /// <returns></returns>
             public Storage CreateMemory() {
-                canConfigure = false;
                 return new Storage(startingState);
             }
 
-            private readonly Dictionary<
-                        TState,
-                        Dictionary<TTrigger, TransitionBase>
-                        > transitions;
-
-            private bool canConfigure;
-            private TState lastConfiguredState;
-            private TTrigger lastConfiguredTrigger;
             private readonly TState startingState;
+            private readonly Dictionary<TState, Dictionary<TTrigger, TransitionBase>> transitions;
+            private readonly Action<TState, TTrigger, TState, TMemory> onAnyTransitionAction;
 
-            private Action<TState, TTrigger, TState, TMemory> onAnyTransitionAction;
-
-            // private TState state;
-
-
-            /// <summary>
-            /// Initializes a new instance with the starting state given in
-            /// <paramref name="startingState"/>
-            /// </summary>
-            /// <param name="startingState">The starting state of the FSM</param>
-            /// <exception cref="System.ArgumentNullException">
-            /// <paramref name="startingState"/> is null.
-            /// </exception>
-            public Machine(TState startingState) {
+            internal Machine(TState startingState,
+                Dictionary<TState, Dictionary<TTrigger, TransitionBase>> transitions,
+                Action<TState, TTrigger, TState, TMemory> onAnyTransitionAction) {
                 if (startingState == null) {
                     throw new ArgumentNullException("startingState");
                 }
 
-                this.canConfigure = true;
                 this.startingState = startingState;
-                this.transitions =
-                    new Dictionary<TState, Dictionary<TTrigger, TransitionBase>>();
+                this.transitions = transitions;
+                this.onAnyTransitionAction = onAnyTransitionAction;
             }
+
 
             private void validateTrigger(TTrigger trigger, TState state) {
                 if (trigger == null) {
                     throw new ArgumentNullException("trigger");
                 }
-                canConfigure = false;
                 if (!transitions.ContainsKey(state)) {
                     var errorMessage = string.Format(
                         "There are no transitions configured for state \"{0}\""
@@ -176,6 +509,7 @@ namespace M16h {
                 }
             }
 
+
             private Transition<TArg> getTransition<TArg>(TState state, TTrigger trigger) {
                 validateTrigger(trigger, state);
                 var transition = transitions[state][trigger] as Transition<TArg>;
@@ -192,6 +526,7 @@ namespace M16h {
                 }
                 return transition;
             }
+
 
             private void transitionState<Targ>(Storage state, Transition<Targ> transition, TTrigger trigger, TMemory memory, Targ arg) {
                 var currentState = state.state;
@@ -220,10 +555,11 @@ namespace M16h {
                 }
             }
 
+
             /// <summary>
             /// Transitions to a new state determined by <paramref name="trigger"/>
             /// and the configuration of the current state previously set by calls
-            /// to one of the <see cref="Tr"/> methods.
+            /// to one of the <see cref="Compiler.Tr"/> methods.
             /// </summary>
             /// <param name="trigger">The trigger to fire.</param>
             /// <param name="memory">Storage holding the state.</param>
@@ -239,7 +575,7 @@ namespace M16h {
                 var state = memory.Memory;
                 var transition = getTransition<Targ>(state.state, trigger);
 
-                if (!transition.Allowed(state.state,trigger)) {
+                if (!transition.Allowed(state.state, trigger)) {
                     return;
                 }
 
@@ -250,7 +586,7 @@ namespace M16h {
             /// <summary>
             /// Transitions to a new state determined by <paramref name="trigger"/>
             /// and the configuration of the current state previously set by calls
-            /// to one of the <see cref="Tr"/> methods.
+            /// to one of the <see cref="Compiler.Tr"/> methods.
             /// </summary>
             /// <param name="trigger">The trigger to fire.</param>
             /// <param name="memory">Storage holding the state.</param>
@@ -262,6 +598,9 @@ namespace M16h {
             /// <paramref name="trigger"/> is null.
             /// </exception>
             public void Fire(TTrigger trigger, TMemory memory) {
+                if (memory == null) {
+                    throw new ArgumentNullException("memory");
+                }
                 var state = memory.Memory;
                 var transition = getTransition(state.state, trigger);
 
@@ -272,280 +611,18 @@ namespace M16h {
                 transitionState(state, transition, trigger, memory);
             }
 
-            /// <summary>
-            /// See <see cref="Guard(Func&lt;TState,TTrigger,TState,bool&gt;)"/>.
-            /// </summary>
-            /// <param name="guard">A delegate to the method that will be called
-            /// before attempting the transition.</param>
-            /// <returns><c>this</c></returns>
-            public Machine<TMemory> Guard(Func<bool> guard) {
-                return Guard((f, tr, t) => guard());
-            }
-
-            /// <summary>
-            /// Sets the method that will be called <em>before</em> attempting to make the
-            /// transition described by the last call to 
-            /// <see cref="Tr(TState, TTrigger, TState)">Tr</see>. The transitions
-            /// will be silently aborted without throwing any errors if
-            /// <paramref name="guard"/> method returns <c>false</c>, and will
-            /// continue normally if the method returns <c>true</c>
-            /// </summary>
-            /// <param name="guard">A delegate to the method that will be called
-            /// before attempting the transition.</param>
-            /// <returns><c>this</c></returns>
-            /// <exception cref="System.InvalidOperationException">No transition
-            /// was configured before calling this method or a guard was already
-            /// set for the last transition.
-            /// </exception>
-            /// <exception cref="System.ArgumentNullException">
-            /// <paramref name="guard"/> is null.
-            /// </exception>
-            public Machine<TMemory> Guard(
-                Func<TState, TTrigger, TState, bool> guard
-                ) {
-                if (guard == null) {
-                    throw new ArgumentNullException("guard");
-                }
-
-                if (!canConfigure) {
-                    throw new InvalidOperationException(
-                        "\"Guard\" cannot be called after \"Fire()\" or" +
-                        " \"Current\" are called."
-                        );
-
-                }
-
-                if (transitions.Count == 0) {
-                    throw new InvalidOperationException(
-                        "\"Guard\" cannot be called before configuring a" +
-                        " transition."
-                        );
-                }
-
-                var tr = transitions[lastConfiguredState][lastConfiguredTrigger];
-
-                if (tr.Guard != null) {
-                    var errorMessage = string.Format(
-                        "A guard has already been configured for state {0}" +
-                        " and trigger {1}.",
-                        lastConfiguredState,
-                        lastConfiguredTrigger
-                        );
-                    throw new InvalidOperationException(errorMessage);
-                }
-
-                tr.Guard = guard;
-
-                return this;
-            }
-
-
-            /// <summary>
-            /// See
-            /// <see cref="On(Action{TState,TTrigger,TState,TMemory})"/>.
-            /// </summary>
-            /// <param name="action">A delegate to a method that will be called 
-            /// on state change.</param>
-            /// <returns><c>this</c></returns>
-            public Machine<TMemory> On<TArg>(Action<TMemory, TArg> action) {
-                return On<TArg>((f, tr, t, st, arg) => action(st, arg));
-            }
-            /// <summary>
-            /// Sets the action that will be called <em>after</em> the transition
-            /// described by the last call to 
-            /// <see cref="Tr(TState, TTrigger, TState)">Tr</see> takes place.
-            /// </summary>
-            /// <param name="action">A delegate to a method that will be called 
-            /// on state change.</param>
-            /// <returns><c>this</c></returns>
-            /// <exception cref="System.InvalidOperationException">No transition
-            /// was configured before calling this method, an action was already
-            /// set for the last transition, or the method was called after the 
-            /// the configuration phase was done (i.e. after 
-            /// <see cref="Fire(TTrigger, TMemory)">Fire</see>, <see cref="IStorage"/>, or
-            /// <see cref="Storage.IsInState(TState)">IsInState</see>) were called).
-            /// </exception>
-            /// <exception cref="System.ArgumentNullException">
-            /// <paramref name="action"/> is null.
-            /// </exception>
-            public Machine<TMemory> On<TArg>(
-                Action<TState, TTrigger, TState, TMemory, TArg> action
-                ) {
-                if (action == null) {
-                    throw new ArgumentNullException("action");
-                }
-
-                if (!canConfigure) {
-                    throw new InvalidOperationException(
-                        "\"On\" method cannot be called after \"Fire()\" or" +
-                        " \"Current\" are called."
-                        );
-                }
-
-                if (transitions.Count == 0) {
-                    throw new InvalidOperationException(
-                        "\"On\" method cannot be called before configuring a" +
-                        " transition."
-                        );
-                }
-
-                var tr = transitions[lastConfiguredState][lastConfiguredTrigger] as Transition<TArg>;
-
-                if (tr == null) {
-                    throw new InvalidOperationException($"{transitions[lastConfiguredState][lastConfiguredTrigger].GetType().Name} doesn't match expected type {typeof(Transition<TArg>).Name}");
-                }
-                if (tr.Action != null) {
-                    var errorMessage = string.Format(
-                        "An action has already been configured for state {0} and" +
-                        " trigger {1}.",
-                        lastConfiguredState,
-                        lastConfiguredTrigger
-                        );
-                    throw new InvalidOperationException(errorMessage);
-                }
-
-                tr.Action = action;
-
-                return this;
-            }
-
-
-
-            /// <summary>
-            /// See
-            /// <see cref="On(Action{TState,TTrigger,TState,TMemory})"/>.
-            /// </summary>
-            /// <param name="action">A delegate to a method that will be called 
-            /// on state change.</param>
-            /// <returns><c>this</c></returns>
-            public Machine<TMemory> On(Action<TMemory> action) {
-                return On((f, tr, t, st) => action(st));
-            }
-            /// <summary>
-            /// Sets the action that will be called <em>after</em> the transition
-            /// described by the last call to 
-            /// <see cref="Tr(TState, TTrigger, TState)">Tr</see> takes place.
-            /// </summary>
-            /// <param name="action">A delegate to a method that will be called 
-            /// on state change.</param>
-            /// <returns><c>this</c></returns>
-            /// <exception cref="System.InvalidOperationException">No transition
-            /// was configured before calling this method, an action was already
-            /// set for the last transition, or the method was called after the 
-            /// the configuration phase was done (i.e. after 
-            /// <see cref="Fire(TTrigger, TMemory)">Fire</see>, <see cref="IStorage"/>, or
-            /// <see cref="Storage.IsInState(TState)">IsInState</see>) were called).
-            /// </exception>
-            /// <exception cref="System.ArgumentNullException">
-            /// <paramref name="action"/> is null.
-            /// </exception>
-            public Machine<TMemory> On(
-                Action<TState, TTrigger, TState, TMemory> action
-                ) {
-                if (action == null) {
-                    throw new ArgumentNullException("action");
-                }
-
-                if (!canConfigure) {
-                    throw new InvalidOperationException(
-                        "\"On\" method cannot be called after \"Fire()\" or" +
-                        " \"Current\" are called."
-                        );
-                }
-
-                if (transitions.Count == 0) {
-                    throw new InvalidOperationException(
-                        "\"On\" method cannot be called before configuring a" +
-                        " transition."
-                        );
-                }
-
-                var tr = transitions[lastConfiguredState][lastConfiguredTrigger] as Transition;
-
-                if (tr == null) {
-                    throw new InvalidOperationException($"{transitions[lastConfiguredState][lastConfiguredTrigger].GetType().Name} doesn't match expected type {typeof(Transition).Name}");
-                }
-                if (tr.Action != null) {
-                    var errorMessage = string.Format(
-                        "An action has already been configured for state {0} and" +
-                        " trigger {1}.",
-                        lastConfiguredState,
-                        lastConfiguredTrigger
-                        );
-                    throw new InvalidOperationException(errorMessage);
-                }
-
-                tr.Action = action;
-
-                return this;
-            }
-
-            /// <summary>
-            /// See <see cref="OnAny(Action{TState,TTrigger,TState,TMemory})"/>.
-            /// </summary>
-            /// <param name="action">A delegate to a method that will be called 
-            /// on state change.</param>
-            /// <returns><c>this</c></returns>
-            public Machine<TMemory> OnAny(Action<TMemory> action) {
-                return OnAny((f, tr, t, st) => action(st));
-            }
-
-            /// <summary>
-            /// Sets the action that will be called after <em>any</em> finite state
-            /// machine transition is triggered.
-            /// </summary>
-            /// <param name="action">A delegate to a method that will be called 
-            /// on state change.</param>
-            /// <returns><c>this</c></returns>
-            /// <exception cref="System.InvalidOperationException">The method was
-            /// called after the configuration phase was done (i.e. after 
-            /// <see cref="Fire(TTrigger, TMemory)">Fire</see>, <see cref="IStorage"/>, or
-            /// <see cref="Storage.IsInState(TState)">IsInState</see>) were called).
-            /// </exception>
-            /// <exception cref="System.ArgumentNullException">
-            /// <paramref name="action"/> is null.
-            /// </exception>
-            public Machine<TMemory> OnAny(
-                Action<TState, TTrigger, TState, TMemory> action
-                ) {
-                if (action == null) {
-                    throw new ArgumentNullException("action");
-                }
-
-                if (!canConfigure) {
-                    throw new InvalidOperationException(
-                        "\"OnAny\" cannot be called after \"Fire()\" or" +
-                        " \"Current\" are called."
-                        );
-                }
-
-                onAnyTransitionAction = action;
-                return this;
-            }
-
-            /// <summary>
-            /// Sets the state of the machine to the starting state specified in
-            /// the <see cref="Machine(TState)">constructor</see>, but 
-            /// does <em>not</em> fire any 
-            /// <see cref="On(Action{TMemory})">transition events</see> and does
-            /// <em>not</em> check any of the 
-            /// <see cref="Guard(Func&lt;bool&gt;)">guard methods.</see>
-            /// </summary>
-            public void Reset(TMemory memory) {
-                memory.Memory.state = startingState;
-            }
 
             /// <summary>
             /// Sets the state of the machine to <paramref name="state"/>, but does
-            /// <em>not</em> fire any <see cref="On(Action{TMemory})">transition
+            /// <em>not</em> fire any <see cref="Compiler.On(Action{TMemory})">transition
             /// events</see> and does <em>not</em> check any of the
-            /// <see cref="Guard(Func&lt;bool&gt;)">guard methods.</see>
+            /// <see cref="Compiler.Guard(Func&lt;bool&gt;)">guard methods.</see>
             /// </summary>
             /// <param name="state">The state to which the machine will be set.
             /// </param>
             /// <param name="memory">The memory which stores the state.</param>
             /// <exception cref="System.ArgumentNullException">
-            /// <paramref name="state"/> is null.
+            /// <paramref name="state"/> is null or <paramref name="memory"/> is null.
             /// </exception>
             /// <exception cref="System.InvalidOperationException">No 
             /// transitions are configured for given <paramref name="state"/>
@@ -554,131 +631,33 @@ namespace M16h {
                 if (state == null) {
                     throw new ArgumentNullException("state");
                 }
+                if (memory == null) {
+                    throw new ArgumentNullException("memory");
+                }
 
                 if (!transitions.ContainsKey(state)) {
-                    var errorMessage = string.Format(
-                        "There are no transitions configured for state \"{0}\"",
-                        state
-                        );
-
-                    throw new InvalidOperationException(errorMessage);
+                    throw new InvalidOperationException($"There are no transitions configured for state '{state}'");
                 }
                 memory.Memory.state = state;
             }
 
-            private void validateTrArgs(TState from, TTrigger trigger, TState to) {
-                if (from == null) {
-                    throw new ArgumentNullException("from");
-                }
-
-                if (trigger == null) {
-                    throw new ArgumentNullException("trigger");
-                }
-
-                if (to == null) {
-                    throw new ArgumentNullException("to");
-                }
-
-
-                if (!canConfigure) {
-                    throw new InvalidOperationException(
-                        "\"Tr\" cannot be called after \"Fire()\" or \"Current\"" +
-                        " are called."
-                        );
-                }
-
-                if (!transitions.ContainsKey(from)) {
-                    transitions.Add(from, new Dictionary<TTrigger, TransitionBase>());
-                }
-                else if (transitions[from].ContainsKey(trigger)) {
-                    string errorMessage = string.Format(
-                        "A transition is already defined for state {0} and" +
-                        " trigger {1}",
-                        from,
-                        trigger
-                        );
-                    throw new InvalidOperationException(errorMessage);
-                }
-            }
 
             /// <summary>
-            /// Short for "Transition." Adds a new entry to the state transition table.
+            /// Sets the state of the machine to the starting state specified in
+            /// the <see cref="Compiler(TState)">constructor</see>, but 
+            /// does <em>not</em> fire any 
+            /// <see cref="Compiler.On(Action{TMemory})">transition events</see> and does
+            /// <em>not</em> check any of the 
+            /// <see cref="Compiler.Guard(Func&lt;bool&gt;)">guard methods.</see>
             /// </summary>
-            /// <param name="from">Current state</param>
-            /// <param name="trigger">Trigger</param>
-            /// <param name="to">The state the FSM will transition to.</param>
-            /// <returns><c>this</c></returns>
-            /// <exception cref="System.InvalidOperationException">If called after
-            /// calling <see cref="Fire(TTrigger, TMemory)">Fire</see> or <see cref="Storage.State"/>
+            /// <exception cref="System.ArgumentNullException">
+            /// <paramref name="memory"/> is null.
             /// </exception>
-            /// <exception cref="System.ArgumentNullException">Any of the
-            /// arguments <paramref name="from"/>, <paramref name="trigger"/>, or 
-            /// <paramref name="to"/> is null.
-            /// </exception>
-            /// <remarks>
-            /// <see cref="Tr"/> methods should be called after the
-            /// <see cref="Machine(TState)">constructor</see> and
-            /// <em>before</em> calling <see cref="Fire(TTrigger, TMemory)">Fire</see> or
-            /// <see cref="Storage.State"/>. Attempting to call any of the <see cref="Tr"/>
-            /// methods afterward will throw an
-            /// <see cref="System.InvalidOperationException">
-            /// InvalidOperationException</see>.
-            /// </remarks>
-            public Machine<TMemory> Tr<TArg>(
-                TState from,
-                TTrigger trigger,
-                TState to
-                ) {
-                validateTrArgs(from, trigger, to);
-
-
-                var transtition = new Transition<TArg>(to);
-                transitions[from].Add(trigger, transtition);
-
-                lastConfiguredState = from;
-                lastConfiguredTrigger = trigger;
-
-                return this;
-            }
-
-
-            /// <summary>
-            /// Short for "Transition." Adds a new entry to the state transition table.
-            /// </summary>
-            /// <param name="from">Current state</param>
-            /// <param name="trigger">Trigger</param>
-            /// <param name="to">The state the FSM will transition to.</param>
-            /// <returns><c>this</c></returns>
-            /// <exception cref="System.InvalidOperationException">If called after
-            /// calling <see cref="Fire(TTrigger, TMemory)">Fire</see> or <see cref="Storage.State"/>
-            /// </exception>
-            /// <exception cref="System.ArgumentNullException">Any of the
-            /// arguments <paramref name="from"/>, <paramref name="trigger"/>, or 
-            /// <paramref name="to"/> is null.
-            /// </exception>
-            /// <remarks>
-            /// <see cref="Tr"/> methods should be called after the
-            /// <see cref="Machine(TState)">constructor</see> and
-            /// <em>before</em> calling <see cref="Fire(TTrigger, TMemory)">Fire</see> or
-            /// <see cref="Storage.State"/>. Attempting to call any of the <see cref="Tr"/>
-            /// methods afterward will throw an 
-            /// <see cref="System.InvalidOperationException">
-            /// InvalidOperationException</see>.
-            /// </remarks>
-            public Machine<TMemory> Tr(
-                TState from,
-                TTrigger trigger,
-                TState to
-                ) {
-                validateTrArgs(from, trigger, to);
-
-                var transtition = new Transition(to);
-                transitions[from].Add(trigger, transtition);
-
-                lastConfiguredState = from;
-                lastConfiguredTrigger = trigger;
-
-                return this;
+            public void Reset(TMemory memory) {
+                if (memory == null) {
+                    throw new ArgumentNullException("memory");
+                }
+                memory.Memory.state = startingState;
             }
         }
     }

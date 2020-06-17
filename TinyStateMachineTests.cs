@@ -37,12 +37,14 @@ namespace M16h {
         }
 
         private static Tsm.Machine<TMemory> GetFixture<TMemory>() where TMemory : IStorage {
-            var machine = new Tsm.Machine<TMemory>(
-                DoorState.Closed
-                );
-            machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed);
-            return machine;
+
+            return GetFixtureCompiler<TMemory>().Compile();
+        }
+
+        private static Tsm.Machine<TMemory>.Compiler GetFixtureCompiler<TMemory>() where TMemory : IStorage {
+            return new Tsm.Machine<TMemory>.Compiler(DoorState.Closed)
+                .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+                .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed);
         }
 
         const int ParallelTestCount = 100;
@@ -100,14 +102,12 @@ namespace M16h {
         [Test]
         public void Appropriate_action_is_called_on_transition() {
 
-            var machine = new Tsm.Machine<DoorMemory>(
-                DoorState.Closed
-                );
-
-            machine.Tr<bool>(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .On<bool>((t,value) => t.wasDoorOpened = value)
-                   .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
-                   .On((t) => t.wasDoorClosed = true);
+            var machine = new Tsm.Machine<DoorMemory>.Compiler(DoorState.Closed)
+                .Tr<bool>(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+                .On<bool>((t, value) => t.wasDoorOpened = value)
+                .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
+                .On((t) => t.wasDoorClosed = true)
+                .Compile();
 
             var doorMemory = new DoorMemory[ParallelTestCount];
             for (int i = 0; i < ParallelTestCount; i++) {
@@ -149,12 +149,11 @@ namespace M16h {
 
         [Test]
         public void Guard_can_stop_transition() {
-            var machine = new Tsm.Machine<Storage>(
-                DoorState.Closed
-                );
-            machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .Guard(() => false)
-                   .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed);
+            var machine = new Tsm.Machine<Storage>.Compiler(DoorState.Closed)
+                .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+                .Guard(() => false)
+                .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
+                .Compile();
 
             Parallel.ForEach(GetTokens(machine), storage => {
                 Assert.That(storage.State, Is.EqualTo(DoorState.Closed));
@@ -165,21 +164,21 @@ namespace M16h {
 
         [Test]
         public void Action_is_called_with_the_expected_parameters() {
-            var machine = new DefaultMachine(
-                DoorState.Closed
-                );
-           machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                  .On((from, trigger, to, storage) => {
-                      Assert.That(from, Is.EqualTo(DoorState.Closed));
-                      Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
-                      Assert.That(to, Is.EqualTo(DoorState.Open));
-                  })
-                  .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
-                  .On((from, trigger, to, storage) => {
-                      Assert.That(from, Is.EqualTo(DoorState.Open));
-                      Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
-                      Assert.That(to, Is.EqualTo(DoorState.Closed));
-                  });
+            var machine = new DefaultMachine.Compiler(DoorState.Closed)
+
+            .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+            .On((from, trigger, to, storage) => {
+                Assert.That(from, Is.EqualTo(DoorState.Closed));
+                Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
+                Assert.That(to, Is.EqualTo(DoorState.Open));
+            })
+            .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
+            .On((from, trigger, to, storage) => {
+                Assert.That(from, Is.EqualTo(DoorState.Open));
+                Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
+                Assert.That(to, Is.EqualTo(DoorState.Closed));
+            })
+            .Compile();
 
 
 
@@ -194,24 +193,22 @@ namespace M16h {
 
         [Test]
         public void Guard_is_called_with_the_expected_parameters() {
-            var machine = new DefaultMachine(
-                DoorState.Closed
-                );
-
-            machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .Guard((from, trigger, to) => {
-                       Assert.That(from, Is.EqualTo(DoorState.Closed));
-                       Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
-                       Assert.That(to, Is.EqualTo(DoorState.Open));
-                       return true;
-                   })
-                   .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
-                   .Guard((from, trigger, to) => {
-                       Assert.That(from, Is.EqualTo(DoorState.Open));
-                       Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
-                       Assert.That(to, Is.EqualTo(DoorState.Closed));
-                       return true;
-                   });
+            var machine = new DefaultMachine.Compiler(DoorState.Closed)
+                .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+                .Guard((from, trigger, to) => {
+                    Assert.That(from, Is.EqualTo(DoorState.Closed));
+                    Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
+                    Assert.That(to, Is.EqualTo(DoorState.Open));
+                    return true;
+                })
+                .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
+                .Guard((from, trigger, to) => {
+                    Assert.That(from, Is.EqualTo(DoorState.Open));
+                    Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
+                    Assert.That(to, Is.EqualTo(DoorState.Closed));
+                    return true;
+                })
+                .Compile();
 
 
             Parallel.ForEach(GetTokens(machine), storage => {
@@ -249,16 +246,14 @@ namespace M16h {
 
         [Test]
         public void Calling_Reset_method_does_not_call_guard_or_trigger_transitions() {
-            var machine = new DefaultMachine(
-                DoorState.Closed
-                );
-
-            machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .On((t) => Assert.Fail())
-                   .Guard((from, trigger, to) => false)
-                   .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
-                   .On((t) => Assert.Fail())
-                   .Guard((from, trigger, to) => false);
+            var machine = new DefaultMachine.Compiler(DoorState.Closed)
+                .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+                .On((t) => Assert.Fail())
+                .Guard((from, trigger, to) => false)
+                .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
+                .On((t) => Assert.Fail())
+                .Guard((from, trigger, to) => false)
+                .Compile();
 
 
 
@@ -283,20 +278,20 @@ namespace M16h {
         [Test]
         public void OnAny_action_is_called_after_every_successful_transition() {
 
-            var machine = GetFixture<TransitionCount>();
-
-            machine.OnAny((count) => {
-                ++count.transitionCount;
-                if (count.transitionCount == 1) {
-                    Assert.That(count.Memory.State, Is.EqualTo(DoorState.Open));
-                }
-                else if (count.transitionCount == 2) {
-                    Assert.That(count.Memory.State, Is.EqualTo(DoorState.Closed));
-                }
-                else {
-                    Assert.Fail();
-                }
-            });
+            var machine = GetFixtureCompiler<TransitionCount>()
+                .OnAny((count) => {
+                    ++count.transitionCount;
+                    if (count.transitionCount == 1) {
+                        Assert.That(count.Memory.State, Is.EqualTo(DoorState.Open));
+                    }
+                    else if (count.transitionCount == 2) {
+                        Assert.That(count.Memory.State, Is.EqualTo(DoorState.Closed));
+                    }
+                    else {
+                        Assert.Fail();
+                    }
+                })
+            .Compile();
 
             var transitionCount = new TransitionCount[ParallelTestCount];
             for (int i = 0; i < ParallelTestCount; i++) {
@@ -313,21 +308,21 @@ namespace M16h {
         [Test]
         public void OnAny_action_is_called_with_the_expected_parameters() {
 
-            var machine = GetFixture<TransitionCount>();
-
-            machine.OnAny((from, trigger, to, count) => {
-                ++count.transitionCount;
-                if (count.transitionCount == 1) {
-                    Assert.That(from, Is.EqualTo(DoorState.Closed));
-                    Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
-                    Assert.That(to, Is.EqualTo(DoorState.Open));
-                }
-                else if (count.transitionCount == 2) {
-                    Assert.That(from, Is.EqualTo(DoorState.Open));
-                    Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
-                    Assert.That(to, Is.EqualTo(DoorState.Closed));
-                }
-            });
+            var machine = GetFixtureCompiler<TransitionCount>()
+                .OnAny((from, trigger, to, count) => {
+                    ++count.transitionCount;
+                    if (count.transitionCount == 1) {
+                        Assert.That(from, Is.EqualTo(DoorState.Closed));
+                        Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
+                        Assert.That(to, Is.EqualTo(DoorState.Open));
+                    }
+                    else if (count.transitionCount == 2) {
+                        Assert.That(from, Is.EqualTo(DoorState.Open));
+                        Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
+                        Assert.That(to, Is.EqualTo(DoorState.Closed));
+                    }
+                })
+                .Compile();
 
             var transitionCount = new TransitionCount[ParallelTestCount];
             for (int i = 0; i < ParallelTestCount; i++) {
@@ -339,5 +334,52 @@ namespace M16h {
                 machine.Fire(DoorEvents.Close, storage);
             });
         }
+    }
+
+    [TestFixture]
+    class MechTests {
+
+        enum TerrainState {
+            Floating,
+            Placed,
+            Loading,
+            Aborting,
+            Aborted,
+            Loaded,
+            Cached,
+        }
+
+        enum TerrainTrigger {
+            Place,
+            StartLoad,
+            LoadComplete,
+            AbortLoad,
+            Hide,
+        }
+
+        class TerrainChunk : TinyStateMachine<TerrainState, TerrainTrigger>.IStorage {
+            public TinyStateMachine<TerrainState, TerrainTrigger>.Storage Memory { get; }
+
+            public TerrainChunk(TinyStateMachine<TerrainState, TerrainTrigger>.Machine<TerrainChunk> machine) {
+                Memory = machine.CreateMemory();
+            }
+        }
+
+
+
+        TinyStateMachine<TerrainState, TerrainTrigger>.Machine<TerrainChunk> GetFixture() {
+            var machine = new TinyStateMachine<TerrainState, TerrainTrigger>.Machine<TerrainChunk>.Compiler(TerrainState.Floating)
+                .Tr(TerrainState.Floating, TerrainTrigger.Place, TerrainState.Placed)
+                .On<string>((c, position) => { })
+                .Compile();
+
+            var chunk = new TerrainChunk(machine);
+
+
+            machine.Fire(TerrainTrigger.Place, chunk, "boo");
+            machine.Fire(TerrainTrigger.Hide, chunk);
+            return machine;
+        }
+
     }
 }
