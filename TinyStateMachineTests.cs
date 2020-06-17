@@ -44,7 +44,7 @@ namespace M16h {
         private static Tsm.Machine<TMemory>.Compiler GetFixtureCompiler<TMemory>() where TMemory : IStorage {
             return new Tsm.Machine<TMemory>.Compiler(DoorState.Closed)
                 .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed);
+                .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed).compiler;
         }
 
         const int ParallelTestCount = 100;
@@ -104,7 +104,7 @@ namespace M16h {
 
             var machine = new Tsm.Machine<DoorMemory>.Compiler(DoorState.Closed)
                 .Tr<bool>(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                .On<bool>((t, value) => t.wasDoorOpened = value)
+                .On((t, value) => t.wasDoorOpened = value)
                 .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
                 .On((t) => t.wasDoorClosed = true)
                 .Compile();
@@ -334,52 +334,5 @@ namespace M16h {
                 machine.Fire(DoorEvents.Close, storage);
             });
         }
-    }
-
-    [TestFixture]
-    class MechTests {
-
-        enum TerrainState {
-            Floating,
-            Placed,
-            Loading,
-            Aborting,
-            Aborted,
-            Loaded,
-            Cached,
-        }
-
-        enum TerrainTrigger {
-            Place,
-            StartLoad,
-            LoadComplete,
-            AbortLoad,
-            Hide,
-        }
-
-        class TerrainChunk : TinyStateMachine<TerrainState, TerrainTrigger>.IStorage {
-            public TinyStateMachine<TerrainState, TerrainTrigger>.Storage Memory { get; }
-
-            public TerrainChunk(TinyStateMachine<TerrainState, TerrainTrigger>.Machine<TerrainChunk> machine) {
-                Memory = machine.CreateMemory();
-            }
-        }
-
-
-
-        TinyStateMachine<TerrainState, TerrainTrigger>.Machine<TerrainChunk> GetFixture() {
-            var machine = new TinyStateMachine<TerrainState, TerrainTrigger>.Machine<TerrainChunk>.Compiler(TerrainState.Floating)
-                .Tr(TerrainState.Floating, TerrainTrigger.Place, TerrainState.Placed)
-                .On<string>((c, position) => { })
-                .Compile();
-
-            var chunk = new TerrainChunk(machine);
-
-
-            machine.Fire(TerrainTrigger.Place, chunk, "boo");
-            machine.Fire(TerrainTrigger.Hide, chunk);
-            return machine;
-        }
-
     }
 }
