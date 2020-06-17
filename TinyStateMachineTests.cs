@@ -1,8 +1,16 @@
-using System;
+﻿using System;
 using NUnit.Framework;
+using System.Threading.Tasks;
+using System.Threading;
+using System.Diagnostics;
 
-namespace M16h
-{
+using StateToken = M16h.StateToken<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents>;
+using IStateToken = M16h.IStateToken<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents>;
+using Tsm = M16h.TinyStateMachine<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents, M16h.StateToken<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents>>;
+
+namespace M16h {
+
+#pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
     /// <summary>
     /// A test for TinyStateMachine using the canonical door example. Door
     /// can be in one of two states: either <see cref="DoorState.Open">Open</see>
@@ -12,23 +20,24 @@ namespace M16h
     /// or <see cref="DoorEvents.Close"/>.
     /// </summary>
     [TestFixture]
-    public class TinyStateMachineTests
-    {
-        enum DoorState
-        {
+    public class TinyStateMachineTests {
+        internal enum DoorState {
             Closed,
             Open,
         }
 
-        enum DoorEvents
-        {
+        internal enum DoorEvents {
             Open,
             Close,
         }
 
-        private static TinyStateMachine<DoorState, DoorEvents> GetFixture()
-        {
-            var machine = new TinyStateMachine<DoorState, DoorEvents>(
+
+        private static Tsm GetFixture() {
+            return GetFixture<StateToken<DoorState, DoorEvents>>();
+        }
+
+        private static TinyStateMachine<DoorState, DoorEvents, TToken> GetFixture<TToken>() where TToken : IStateToken<DoorState, DoorEvents> {
+            var machine = new TinyStateMachine<DoorState, DoorEvents, TToken>(
                 DoorState.Closed
                 );
             machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
@@ -36,227 +45,291 @@ namespace M16h
             return machine;
         }
 
-        [Test]
-        public void State_machine_is_constructed_with_the_correct_initial_state()
-        {
-            var machine = GetFixture();
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
+        const int ParallelTestCount = 100;
+        private static StateToken[] GetTokens(Tsm machine) {
+            var tokens = new StateToken[ParallelTestCount];
+
+            for (int i = 0; i < ParallelTestCount; i++) {
+                tokens[i] = machine.CreateToken();
+            }
+            return tokens;
         }
 
         [Test]
-        public void Test_simple_transition()
-        {
+        public void State_machine_is_constructed_with_the_correct_initial_state() {
             var machine = GetFixture();
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
-            machine.Fire(DoorEvents.Open);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Open));
+
+            Parallel.ForEach(GetTokens(machine), token => {
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+            });
         }
 
         [Test]
-        public void Appropriate_action_is_called_on_transition()
-        {
-            var wasDoorOpened = false;
-            var wasDoorClosed = false;
+        public void Test_simple_transition() {
+            var machine = GetFixture();
 
-            var machine = new TinyStateMachine<DoorState, DoorEvents>(
+            Parallel.ForEach(GetTokens(machine), token => {
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+                machine.Fire(DoorEvents.Open, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Open));
+            });
+        }
+
+        [Test]
+        public void Test_simple_transition_2_tokens() {
+            var machine = GetFixture();
+
+            Parallel.ForEach(GetTokens(machine), token => {
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+                machine.Fire(DoorEvents.Open, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Open));
+            });
+        }
+
+        class DoorMemory : IStateToken {
+            internal bool wasDoorOpened = false;
+            internal bool wasDoorClosed = false;
+
+            internal DoorMemory(M16h.TinyStateMachine<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents, DoorMemory> stateMachine) {
+                Token = stateMachine.CreateToken();
+            }
+
+            public StateToken Token { get; private set; }
+        }
+
+        [Test]
+        public void Appropriate_action_is_called_on_transition() {
+
+            var machine = new TinyStateMachine<TinyStateMachineTests.DoorState, TinyStateMachineTests.DoorEvents, DoorMemory>(
                 DoorState.Closed
                 );
-            
+
             machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .On(() => wasDoorOpened = true)
+                   .On((t) => t.wasDoorOpened = true)
                    .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
-                   .On(() => wasDoorClosed = true);
+                   .On((t) => t.wasDoorClosed = true);
 
-            Assert.That(wasDoorOpened, Is.False);
-            Assert.That(wasDoorClosed, Is.False);
+            var doorMemory = new DoorMemory[ParallelTestCount];
+            for (int i = 0; i < ParallelTestCount; i++) {
+                doorMemory[i] = new DoorMemory(machine);
+            }
 
-            machine.Fire(DoorEvents.Open);
+            Parallel.ForEach(doorMemory, token => {
+                Assert.That(token.wasDoorOpened, Is.False);
+                Assert.That(token.wasDoorClosed, Is.False);
 
-            Assert.That(wasDoorOpened, Is.True);
-            Assert.That(wasDoorClosed, Is.False);
+                machine.Fire(DoorEvents.Open, token);
 
-            machine.Fire(DoorEvents.Close);
+                Assert.That(token.wasDoorOpened, Is.True);
+                Assert.That(token.wasDoorClosed, Is.False);
 
-            Assert.That(wasDoorOpened, Is.True);
-            Assert.That(wasDoorClosed, Is.True);
+                machine.Fire(DoorEvents.Close, token);
+
+                Assert.That(token.wasDoorOpened, Is.True);
+                Assert.That(token.wasDoorClosed, Is.True);
+            });
         }
 
         [Test]
-        public void Firing_trigger_with_no_valid_transition_throws_exception()
-        {
+        public void Firing_trigger_with_no_valid_transition_throws_exception() {
             var machine = GetFixture();
+            var token = machine.CreateToken();
             Assert.Throws<InvalidOperationException>(
-                () => machine.Fire(DoorEvents.Close)
-                );                
+                () => machine.Fire(DoorEvents.Close, token)
+                );
         }
 
         [Test]
-        public void Guard_can_stop_transition()
-        {
-            var machine = new TinyStateMachine<DoorState, DoorEvents>(
+        public void Guard_can_stop_transition() {
+            var machine = new Tsm(
                 DoorState.Closed
                 );
             machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
                    .Guard(() => false)
                    .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed);
 
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
-            machine.Fire(DoorEvents.Open);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
+            Parallel.ForEach(GetTokens(machine), token => {
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+                machine.Fire(DoorEvents.Open, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+            });
         }
 
         [Test]
-        public void Action_is_called_with_the_expected_parameters()
-        {
-            var machine = new TinyStateMachine<DoorState, DoorEvents>(
+        public void Action_is_called_with_the_expected_parameters() {
+            var machine = new Tsm(
                 DoorState.Closed
                 );
             machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .On((from, trigger, to) =>
-                   {
+                   .On((from, trigger, to, token) => {
                        Assert.That(from, Is.EqualTo(DoorState.Closed));
                        Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
                        Assert.That(to, Is.EqualTo(DoorState.Open));
                    })
                    .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
-                   .On((from, trigger, to) =>
-                   {
+                   .On((from, trigger, to, token) => {
                        Assert.That(from, Is.EqualTo(DoorState.Open));
                        Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
                        Assert.That(to, Is.EqualTo(DoorState.Closed));
                    });
 
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
-            machine.Fire(DoorEvents.Open);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Open));
-            machine.Fire(DoorEvents.Close);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
+
+
+            Parallel.ForEach(GetTokens(machine), token => {
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+                machine.Fire(DoorEvents.Open, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Open));
+                machine.Fire(DoorEvents.Close, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+            });
         }
 
         [Test]
-        public void Guard_is_called_with_the_expected_parameters()
-        {
-            var machine = new TinyStateMachine<DoorState, DoorEvents>(
+        public void Guard_is_called_with_the_expected_parameters() {
+            var machine = new Tsm(
                 DoorState.Closed
                 );
-            
+
             machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .Guard((from, trigger, to) =>
-                   {
+                   .Guard((from, trigger, to) => {
                        Assert.That(from, Is.EqualTo(DoorState.Closed));
                        Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
                        Assert.That(to, Is.EqualTo(DoorState.Open));
                        return true;
                    })
                    .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
-                   .Guard((from, trigger, to) =>
-                   {
+                   .Guard((from, trigger, to) => {
                        Assert.That(from, Is.EqualTo(DoorState.Open));
                        Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
                        Assert.That(to, Is.EqualTo(DoorState.Closed));
                        return true;
                    });
 
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
-            machine.Fire(DoorEvents.Open);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Open));
-            machine.Fire(DoorEvents.Close);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
+
+            Parallel.ForEach(GetTokens(machine), token => {
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+                machine.Fire(DoorEvents.Open, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Open));
+                machine.Fire(DoorEvents.Close, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+            });
         }
 
         [Test]
-        public void Reset_method_returns_machine_to_initial_state()
-        {
+        public void Reset_method_returns_machine_to_initial_state() {
             var machine = GetFixture();
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
-            machine.Fire(DoorEvents.Open);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Open));
-            machine.Reset();
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
+
+            Parallel.ForEach(GetTokens(machine), token => {
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+                machine.Fire(DoorEvents.Open, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Open));
+                machine.Reset(token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+            });
         }
 
         [Test]
-        public void Reset_method_sets_machine_to_specified_state()
-        {
+        public void Reset_method_sets_machine_to_specified_state() {
             var machine = GetFixture();
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
-            machine.Reset(DoorState.Open);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Open));
+
+            Parallel.ForEach(GetTokens(machine), token => {
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+                machine.Reset(DoorState.Open, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Open));
+            });
         }
 
         [Test]
-        public void Calling_Reset_method_does_not_call_guard_or_trigger_transitions()
-        {
-            var machine = new TinyStateMachine<DoorState, DoorEvents>(
+        public void Calling_Reset_method_does_not_call_guard_or_trigger_transitions() {
+            var machine = new Tsm(
                 DoorState.Closed
                 );
-                
+
             machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .On(() => Assert.Fail())
+                   .On((t) => Assert.Fail())
                    .Guard((from, trigger, to) => false)
                    .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
-                   .On(() => Assert.Fail())
+                   .On((t) => Assert.Fail())
                    .Guard((from, trigger, to) => false);
 
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
-            machine.Reset(DoorState.Open);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Open));
-            machine.Reset(DoorState.Closed);
-            Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
+
+
+            Parallel.ForEach(GetTokens(machine), token => {
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+                machine.Reset(DoorState.Open, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Open));
+                machine.Reset(DoorState.Closed, token);
+                Assert.That(token.State, Is.EqualTo(DoorState.Closed));
+            });
         }
 
-        [Test]
-        public void OnAny_action_is_called_after_every_successful_transition()
-        {
-            var transitionCount = 0;
-            var machine = GetFixture();
+        class TransitionCount : IStateToken {
+            internal int transitionCount = 0;
 
-            machine.OnAny(() =>
-            {
-                ++transitionCount;
-                if (transitionCount == 1)
-                {
-                    Assert.That(machine.State, Is.EqualTo(DoorState.Open));
+            internal TransitionCount(TinyStateMachine<DoorState, DoorEvents, TransitionCount> stateMachine) {
+                Token = stateMachine.CreateToken();
+            }
+
+            public StateToken Token { get; private set; }
+        }
+        [Test]
+        public void OnAny_action_is_called_after_every_successful_transition() {
+
+            var machine = GetFixture<TransitionCount>();
+
+            machine.OnAny((count) => {
+                ++count.transitionCount;
+                if (count.transitionCount == 1) {
+                    Assert.That(count.Token.State, Is.EqualTo(DoorState.Open));
                 }
-                else if (transitionCount == 2)
-                {
-                    Assert.That(machine.State, Is.EqualTo(DoorState.Closed));
+                else if (count.transitionCount == 2) {
+                    Assert.That(count.Token.State, Is.EqualTo(DoorState.Closed));
                 }
-                else
-                {
+                else {
                     Assert.Fail();
                 }
             });
 
-            machine.Fire(DoorEvents.Open);
-            machine.Fire(DoorEvents.Close);
-            Assert.That(transitionCount, Is.EqualTo(2));
+            var transitionCount = new TransitionCount[ParallelTestCount];
+            for (int i = 0; i < ParallelTestCount; i++) {
+                transitionCount[i] = new TransitionCount(machine);
+            }
+
+            Parallel.ForEach(transitionCount, token => {
+                machine.Fire(DoorEvents.Open, token);
+                machine.Fire(DoorEvents.Close, token);
+                Assert.That(token.transitionCount, Is.EqualTo(2));
+            });
         }
 
         [Test]
-        public void OnAny_action_is_called_with_the_expected_parameters()
-        {
-            var transitionCount = 0;
-            var machine = GetFixture();
+        public void OnAny_action_is_called_with_the_expected_parameters() {
 
-            machine.OnAny((from, trigger, to) =>
-            {
-                ++transitionCount;
-                if (transitionCount == 1)
-                {
+            var machine = GetFixture<TransitionCount>();
+
+            machine.OnAny((from, trigger, to, count) => {
+                ++count.transitionCount;
+                if (count.transitionCount == 1) {
                     Assert.That(from, Is.EqualTo(DoorState.Closed));
                     Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
                     Assert.That(to, Is.EqualTo(DoorState.Open));
                 }
-                else if (transitionCount == 2)
-                {
+                else if (count.transitionCount == 2) {
                     Assert.That(from, Is.EqualTo(DoorState.Open));
                     Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
                     Assert.That(to, Is.EqualTo(DoorState.Closed));
                 }
             });
-            machine.Fire(DoorEvents.Open);
-            machine.Fire(DoorEvents.Close);            
+
+            var transitionCount = new TransitionCount[ParallelTestCount];
+            for (int i = 0; i < ParallelTestCount; i++) {
+                transitionCount[i] = new TransitionCount(machine);
+            }
+
+            Parallel.ForEach(transitionCount, token => {
+                machine.Fire(DoorEvents.Open, token);
+                machine.Fire(DoorEvents.Close, token);
+            });
         }
     }
 }
