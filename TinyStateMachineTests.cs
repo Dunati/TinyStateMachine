@@ -104,8 +104,8 @@ namespace M16h {
                 DoorState.Closed
                 );
 
-            machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .On((t) => t.wasDoorOpened = true)
+            machine.Tr<bool>(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+                   .On<bool>((t,value) => t.wasDoorOpened = value)
                    .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
                    .On((t) => t.wasDoorClosed = true);
 
@@ -118,7 +118,14 @@ namespace M16h {
                 Assert.That(storage.wasDoorOpened, Is.False);
                 Assert.That(storage.wasDoorClosed, Is.False);
 
-                machine.Fire(DoorEvents.Open, storage);
+                Assert.Throws<InvalidOperationException>(() =>
+                    machine.Fire(DoorEvents.Open, storage)
+                );
+                Assert.Throws<InvalidOperationException>(() =>
+                    machine.Fire(DoorEvents.Open, storage, 14)
+                );
+
+                machine.Fire(DoorEvents.Open, storage, true);
 
                 Assert.That(storage.wasDoorOpened, Is.True);
                 Assert.That(storage.wasDoorClosed, Is.False);
@@ -129,6 +136,7 @@ namespace M16h {
                 Assert.That(storage.wasDoorClosed, Is.True);
             });
         }
+
 
         [Test]
         public void Firing_trigger_with_no_valid_transition_throws_exception() {
@@ -160,18 +168,18 @@ namespace M16h {
             var machine = new DefaultMachine(
                 DoorState.Closed
                 );
-            machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
-                   .On((from, trigger, to, storage) => {
-                       Assert.That(from, Is.EqualTo(DoorState.Closed));
-                       Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
-                       Assert.That(to, Is.EqualTo(DoorState.Open));
-                   })
-                   .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
-                   .On((from, trigger, to, storage) => {
-                       Assert.That(from, Is.EqualTo(DoorState.Open));
-                       Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
-                       Assert.That(to, Is.EqualTo(DoorState.Closed));
-                   });
+           machine.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+                  .On((from, trigger, to, storage) => {
+                      Assert.That(from, Is.EqualTo(DoorState.Closed));
+                      Assert.That(trigger, Is.EqualTo(DoorEvents.Open));
+                      Assert.That(to, Is.EqualTo(DoorState.Open));
+                  })
+                  .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
+                  .On((from, trigger, to, storage) => {
+                      Assert.That(from, Is.EqualTo(DoorState.Open));
+                      Assert.That(trigger, Is.EqualTo(DoorEvents.Close));
+                      Assert.That(to, Is.EqualTo(DoorState.Closed));
+                  });
 
 
 
