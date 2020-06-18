@@ -4,10 +4,6 @@ using System.Threading.Tasks;
 using System.Threading;
 using System.Diagnostics;
 
-using Storage = M16h.TinyStateMachine<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents>.Storage;
-using IStorage = M16h.TinyStateMachine<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents>.IStorage;
-using Tsm = M16h.TinyStateMachine<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents>;
-using DefaultMachine = M16h.TinyStateMachine<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents>.Machine<M16h.TinyStateMachine<M16h.TinyStateMachineTests.DoorState, M16h.TinyStateMachineTests.DoorEvents>.Storage>;
 namespace M16h {
 
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
@@ -21,35 +17,107 @@ namespace M16h {
     /// </summary>
     [TestFixture]
     public class TinyStateMachineTests {
-        internal enum DoorState {
+        public enum DoorState {
             Closed,
             Open,
         }
 
-        internal enum DoorEvents {
+        public enum DoorEvents {
             Open,
             Close,
         }
 
-
-        private static Tsm.Machine<Storage> GetFixture() {
-            return GetFixture<Storage>();
+        public class Door : TinyStateMachine<DoorState, DoorEvents>.IStorage {
+            public TinyStateMachine<DoorState, DoorEvents>.Storage Memory { get; set; }
+            public bool WasSlammed { get; set; }
         }
 
-        private static Tsm.Machine<TMemory> GetFixture<TMemory>() where TMemory : IStorage {
+        public void WorkTheDoor() {
+            // Declare the FSM and specify the starting state.
+            var doorFsmCompiler = TinyStateMachine<DoorState, DoorEvents>.Create<Door>(DoorState.Closed);
+
+            // Now configure the state transition table.
+            doorFsmCompiler.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+                   .Tr<bool>(DoorState.Open, DoorEvents.Close, DoorState.Closed)
+                   .On((d, slammed) => d.WasSlammed = slammed);
+
+            var doorFsm = doorFsmCompiler.Compile();
+
+            var door = new Door() { Memory = doorFsm.CreateMemory() };
+
+            // As specified in the constructor, the door starts closed.
+            Debug.Assert(door.Memory.IsInState(DoorState.Closed));
+
+            // Let's trigger a transition
+            doorFsm.Fire(DoorEvents.Open, door);
+
+            // Door is now open.
+            Debug.Assert(door.Memory.IsInState(DoorState.Open));
+
+            // create as many doors as needed
+            var otherDoor = new Door() { Memory = doorFsm.CreateMemory() };
+
+            // The state machine is shared, but the state is not
+            Debug.Assert(otherDoor.Memory.IsInState(DoorState.Closed));
+
+            // According to the transition table, closing a door requires
+            // a bool argument. The following will throw an exception
+            bool exceptionWasThrown = false;
+            try {
+                // Let's trigger the other transition
+                doorFsm.Fire(DoorEvents.Close, door);
+            }
+            catch {
+                exceptionWasThrown = true;
+            }
+            Debug.Assert(exceptionWasThrown == true);
+
+            // Door is still open.
+            Debug.Assert(door.Memory.IsInState(DoorState.Open));
+
+            // Slam it this time
+            doorFsm.Fire(DoorEvents.Close, door, true);
+
+            // Door is now closed.
+            Debug.Assert(door.Memory.IsInState(DoorState.Closed));
+
+            // Door is was slammed.
+            Debug.Assert(door.WasSlammed);
+
+            // still closed
+            Debug.Assert(otherDoor.Memory.IsInState(DoorState.Closed));
+
+            // According to the transition table, a closed door
+            // cannot be closed. The following will throw an exception
+            exceptionWasThrown = false;
+            try {
+                doorFsm.Fire(DoorEvents.Close, door);
+            }
+            catch {
+                exceptionWasThrown = true;
+            }
+            Debug.Assert(exceptionWasThrown == true);
+        }
+
+
+        private static TinyStateMachine<DoorState,DoorEvents>.Machine<TinyStateMachine<DoorState, DoorEvents>.Storage> GetFixture() {
+            return GetFixture<TinyStateMachine<DoorState, DoorEvents>.Storage>();
+        }
+
+        private static TinyStateMachine<DoorState,DoorEvents>.Machine<TMemory> GetFixture<TMemory>() where TMemory : TinyStateMachine<DoorState, DoorEvents>.IStorage {
 
             return GetFixtureCompiler<TMemory>().Compile();
         }
 
-        private static Tsm.Machine<TMemory>.Compiler GetFixtureCompiler<TMemory>() where TMemory : IStorage {
-            return new Tsm.Machine<TMemory>.Compiler(DoorState.Closed)
+        private static TinyStateMachine<DoorState,DoorEvents>.Machine<TMemory>.Compiler GetFixtureCompiler<TMemory>() where TMemory : TinyStateMachine<DoorState, DoorEvents>.IStorage {
+            return TinyStateMachine<DoorState,DoorEvents>.Create<TMemory>(DoorState.Closed)
                 .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
                 .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed).compiler;
         }
 
         const int ParallelTestCount = 100;
-        private static Storage[] GetTokens(Tsm.Machine<Storage> machine) {
-            var tokens = new Storage[ParallelTestCount];
+        private static TinyStateMachine<DoorState, DoorEvents>.Storage[] GetTokens(TinyStateMachine<DoorState,DoorEvents>.Machine<TinyStateMachine<DoorState, DoorEvents>.Storage> machine) {
+            var tokens = new TinyStateMachine<DoorState, DoorEvents>.Storage[ParallelTestCount];
 
             for (int i = 0; i < ParallelTestCount; i++) {
                 tokens[i] = machine.CreateMemory();
@@ -88,21 +156,21 @@ namespace M16h {
             });
         }
 
-        class DoorMemory : IStorage {
+        class DoorMemory : TinyStateMachine<DoorState, DoorEvents>.IStorage {
             internal bool wasDoorOpened = false;
             internal bool wasDoorClosed = false;
 
-            internal DoorMemory(Tsm.Machine<DoorMemory> stateMachine) {
+            internal DoorMemory(TinyStateMachine<DoorState,DoorEvents>.Machine<DoorMemory> stateMachine) {
                 Memory = stateMachine.CreateMemory();
             }
 
-            public Storage Memory { get; private set; }
+            public TinyStateMachine<DoorState, DoorEvents>.Storage Memory { get; private set; }
         }
 
         [Test]
         public void Appropriate_action_is_called_on_transition() {
 
-            var machine = new Tsm.Machine<DoorMemory>.Compiler(DoorState.Closed)
+            var machine = TinyStateMachine<DoorState, DoorEvents>.Create<DoorMemory>(DoorState.Closed)
                 .Tr<bool>(DoorState.Closed, DoorEvents.Open, DoorState.Open)
                 .On((t, value) => t.wasDoorOpened = value)
                 .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
@@ -149,7 +217,7 @@ namespace M16h {
 
         [Test]
         public void Guard_can_stop_transition() {
-            var machine = new Tsm.Machine<Storage>.Compiler(DoorState.Closed)
+            var machine = TinyStateMachine<DoorState,DoorEvents>.Create(DoorState.Closed)
                 .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
                 .Guard(() => false)
                 .Tr(DoorState.Open, DoorEvents.Close, DoorState.Closed)
@@ -164,7 +232,7 @@ namespace M16h {
 
         [Test]
         public void Action_is_called_with_the_expected_parameters() {
-            var machine = new DefaultMachine.Compiler(DoorState.Closed)
+            var machine = TinyStateMachine<DoorState, DoorEvents>.Create(DoorState.Closed)
 
             .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
             .On((from, trigger, to, storage) => {
@@ -193,7 +261,7 @@ namespace M16h {
 
         [Test]
         public void Guard_is_called_with_the_expected_parameters() {
-            var machine = new DefaultMachine.Compiler(DoorState.Closed)
+            var machine = TinyStateMachine<DoorState, DoorEvents>.Create(DoorState.Closed)
                 .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
                 .Guard((from, trigger, to) => {
                     Assert.That(from, Is.EqualTo(DoorState.Closed));
@@ -246,7 +314,7 @@ namespace M16h {
 
         [Test]
         public void Calling_Reset_method_does_not_call_guard_or_trigger_transitions() {
-            var machine = new DefaultMachine.Compiler(DoorState.Closed)
+            var machine = TinyStateMachine<DoorState, DoorEvents>.Create(DoorState.Closed)
                 .Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
                 .On((t) => Assert.Fail())
                 .Guard((from, trigger, to) => false)
@@ -266,14 +334,14 @@ namespace M16h {
             });
         }
 
-        class TransitionCount : IStorage {
+        class TransitionCount : TinyStateMachine<DoorState, DoorEvents>.IStorage {
             internal int transitionCount = 0;
 
-            internal TransitionCount(Tsm.Machine<TransitionCount> stateMachine) {
+            internal TransitionCount(TinyStateMachine<DoorState,DoorEvents>.Machine<TransitionCount> stateMachine) {
                 Memory = stateMachine.CreateMemory();
             }
 
-            public Storage Memory { get; private set; }
+            public TinyStateMachine<DoorState, DoorEvents>.Storage Memory { get; private set; }
         }
         [Test]
         public void OnAny_action_is_called_after_every_successful_transition() {

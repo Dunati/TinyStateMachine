@@ -5,6 +5,14 @@ library for the .NET framework written in C#. It's so lightweight
 that it consists of a single source file. There are no assemlbies to reference
 and no binaries to wrangle.
 
+This fork has a few major changes:
+* States are stored in a separate object from the state machine itself. This allows for one machine to be shared by many objects.
+* Transitions may take a single argument. If a transition is declared as taking an argument, but triggred without one, and exception is thrown.
+* Creating the fsm and running it have been split out into separate classes to remove much of the run time checking and state. The fluent interface 
+  should be harder to get wrong.
+* Some error conditions have been moved to Conditional("Debug") when then are not expected to be encountered.
+* Only enums are supported for state and triggers
+
 # Example
 A good example is a Finite State Machine (FSM) for a door. To keep
 things as simple as possible, let's assume that the door can be in one
@@ -22,63 +30,94 @@ Here's the [state transition table](https://en.wikipedia.org/wiki/State_transiti
 And here's how this table is represented in Tiny State Machine:
 
 ~~~c#
-// Define the states of the door FSM
-public enum DoorState { Opened, Closed }
+public enum DoorState {
+    Closed,
+    Open,
+}
 
-// Define the triggers that would cause the
-// FSM to switch between states.
-public enum DoorTrigger { Open, Close }
+public enum DoorEvents {
+    Open,
+    Close,
+}
 
-public void WorkTheDoor()
-{
+public class Door : TinyStateMachine<DoorState, DoorEvents>.IStorage {
+    public TinyStateMachine<DoorState, DoorEvents>.Storage Memory { get; set; }
+    public bool WasSlammed { get; set; }
+}
+
+public void WorkTheDoor() {
     // Declare the FSM and specify the starting state.
-    var doorFsm = new TinyStateMachine<DoorState, DoorTrigger>
-    (DoorState.Closed);
+    var doorFsmCompiler = TinyStateMachine<DoorState, DoorEvents>.Create<Door>(DoorState.Closed);
 
     // Now configure the state transition table.
-    doorFsm.Tr(DoorState.Closed, DoorTrigger.Open,  DoorState.Opened)
-           .Tr(DoorState.Opened, DoorTrigger.Close, DoorState.Closed);
+    doorFsmCompiler.Tr(DoorState.Closed, DoorEvents.Open, DoorState.Open)
+            .Tr<bool>(DoorState.Open, DoorEvents.Close, DoorState.Closed)
+            .On((d, slammed) => d.WasSlammed = slammed);
+
+    var doorFsm = doorFsmCompiler.Compile();
+
+    var door = new Door() { Memory = doorFsm.CreateMemory() };
 
     // As specified in the constructor, the door starts closed.
-    Debug.Assert(doorFsm.IsInState(DoorState.Closed));
+    Debug.Assert(door.Memory.IsInState(DoorState.Closed));
 
     // Let's trigger a transition
-    doorFsm.Trigger(DoorTrigger.Open);
+    doorFsm.Fire(DoorEvents.Open, door);
 
     // Door is now open.
-    Debug.Assert(doorFsm.IsInState(DoorState.Opened));
+    Debug.Assert(door.Memory.IsInState(DoorState.Open));
 
-    // Let's trigger the other transition
-    doorFsm.Trigger(DoorTrigger.Close);
+    // create as many doors as needed
+    var otherDoor = new Door() { Memory = doorFsm.CreateMemory() };
+
+    // The state machine is shared, but the state is not
+    Debug.Assert(otherDoor.Memory.IsInState(DoorState.Closed));
+
+    // According to the transition table, closing a door requires
+    // a bool argument. The following will throw an exception
+    bool exceptionWasThrown = false;
+    try {
+        // Let's trigger the other transition
+        doorFsm.Fire(DoorEvents.Close, door);
+    }
+    catch {
+        exceptionWasThrown = true;
+    }
+    Debug.Assert(exceptionWasThrown == true);
+
+    // Door is still open.
+    Debug.Assert(door.Memory.IsInState(DoorState.Open));
+
+    // Slam it this time
+    doorFsm.Fire(DoorEvents.Close, door, true);
 
     // Door is now closed.
-    Debug.Assert(doorFsm.IsInState(DoorState.Closed));
+    Debug.Assert(door.Memory.IsInState(DoorState.Closed));
+
+    // Door is was slammed.
+    Debug.Assert(door.WasSlammed);
+
+    // still closed
+    Debug.Assert(otherDoor.Memory.IsInState(DoorState.Closed));
 
     // According to the transition table, a closed door
     // cannot be closed. The following will throw an exception
-    bool exceptionWasThrown = false;
-    try
-    {
-        doorFsm.Trigger(DoorTrigger.Close);
+    exceptionWasThrown = false;
+    try {
+        doorFsm.Fire(DoorEvents.Close, door);
     }
-    catch
-    {
+    catch {
         exceptionWasThrown = true;
     }
     Debug.Assert(exceptionWasThrown == true);
 }
 ~~~
 
-Note how `enum` types are used to define both the states and the triggers. It's
-possible to use any other type for this purpose, but enums usually make the
-most sense, especially when it comes to triggers.
-
-A more ellaborate example will follow.
 
 # Requirements
 Tiny State Machine runs on:
 
-*   The .NET Framework 3.5 and above.
+*   The .NET Framework 4 and above.
 *   Unity3D 4.6 and above.
 
 It might work with other frameworks and/or versions, but these are

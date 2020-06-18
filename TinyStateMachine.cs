@@ -75,6 +75,27 @@ namespace M16h {
             }
         }
 
+        /// <summary>
+        /// Shortcut for creating a new compiler
+        /// </summary>
+        /// <typeparam name="TMemory">
+        /// The type representing the memory state.
+        /// </typeparam>
+        /// <param name="startingState">The initial state for new <see cref="Storage"/> objects.</param>
+        /// <returns></returns>
+        public static Machine<TMemory>.Compiler Create<TMemory>(TState startingState)
+            where TMemory : IStorage {
+            return new Machine<TMemory>.Compiler(startingState);
+        }
+
+        /// <summary>
+        /// Shortcut for creating a new compiler
+        /// </summary>
+        /// <param name="startingState">The initial state for new <see cref="Storage"/> objects.</param>
+        /// <returns></returns>
+        public static Machine<Storage>.Compiler Create(TState startingState){
+            return new Machine<Storage>.Compiler(startingState);
+        }
 
 
         /// <summary>
